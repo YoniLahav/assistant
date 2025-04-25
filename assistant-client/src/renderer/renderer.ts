@@ -6,10 +6,19 @@ function initHandler() {
 
   const messageInput = document.getElementById('messageInput') as HTMLInputElement;
   const sendButton = document.getElementById('sendButton') as HTMLButtonElement;
-  const responseDiv = document.getElementById('response') as HTMLDivElement;
-  const responseText = document.getElementById('responseText') as HTMLSpanElement;
+  const chatContainer = document.getElementById('chatContainer') as HTMLDivElement;
 
   let isProcessing = false;
+  let currentAssistantMessage: HTMLDivElement | null = null;
+
+  function addMessage(message: string, isUser: boolean) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${isUser ? 'user-message' : 'assistant-message'}`;
+    messageDiv.textContent = message;
+    chatContainer.appendChild(messageDiv);
+    chatContainer.scrollTop = chatContainer.scrollHeight;
+    return messageDiv;
+  }
 
   async function sendMessage() {
     if (isProcessing) return;
@@ -22,9 +31,8 @@ function initHandler() {
       isProcessing = true;
       sendButton.disabled = true;
 
-      // Clear previous response
-      responseText.textContent = '';
-      responseDiv.style.display = 'block';
+      // Add user message to chat
+      addMessage(message, true);
 
       // Create the request body
       const requestBody = JSON.stringify({ message });
@@ -41,6 +49,9 @@ function initHandler() {
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
+
+      // Create a new assistant message div
+      currentAssistantMessage = addMessage('', false);
 
       // Handle streaming response
       const reader = response.body?.getReader();
@@ -66,7 +77,9 @@ function initHandler() {
           if (line.trim()) {
             try {
               const { token } = JSON.parse(line);
-              responseText.textContent += token;
+              if (currentAssistantMessage) {
+                currentAssistantMessage.textContent += token;
+              }
             } catch (e) {
               console.error('Error parsing JSON:', e);
             }
@@ -78,7 +91,9 @@ function initHandler() {
       if (buffer.trim()) {
         try {
           const { token } = JSON.parse(buffer);
-          responseText.textContent += token;
+          if (currentAssistantMessage) {
+            currentAssistantMessage.textContent += token;
+          }
         } catch (e) {
           console.error('Error parsing JSON:', e);
         }
@@ -86,11 +101,13 @@ function initHandler() {
 
     } catch (error) {
       console.error('Error:', error);
-      responseText.textContent = 'Error communicating with the backend';
-      responseDiv.style.display = 'block';
+      if (currentAssistantMessage) {
+        currentAssistantMessage.textContent = 'Error communicating with the backend';
+      }
     } finally {
       isProcessing = false;
       sendButton.disabled = false;
+      currentAssistantMessage = null;
     }
   }
 
