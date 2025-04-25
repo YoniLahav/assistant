@@ -10,8 +10,7 @@ def home():
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
-    message = data.get('message', '')
-    return Response(stream_with_context(send_message(message)), mimetype='application/x-ndjson')
+    return Response(stream_with_context(send_message(data)), mimetype='application/x-ndjson')
 
 if __name__ == "__main__":
     app.run(debug=True)

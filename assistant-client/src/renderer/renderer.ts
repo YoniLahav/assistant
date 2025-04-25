@@ -1,5 +1,10 @@
 const { ipcRenderer } = require('electron');
 
+interface Message {
+  text: string;
+  role: 'user' | 'assistant';
+}
+
 function initHandler() {
   // Remove this listener first to prevent any race conditions
   document.removeEventListener('DOMContentLoaded', initHandler);
@@ -10,6 +15,7 @@ function initHandler() {
 
   let isProcessing = false;
   let currentAssistantMessage: HTMLDivElement | null = null;
+  let messageHistory: Message[] = [];
 
   function addMessage(message: string, isUser: boolean) {
     const messageDiv = document.createElement('div');
@@ -34,8 +40,14 @@ function initHandler() {
       // Add user message to chat
       addMessage(message, true);
 
-      // Create the request body
-      const requestBody = JSON.stringify({ message });
+      // Create the request body with message history
+      const requestBody = JSON.stringify({
+        message: {
+          text: message,
+          role: 'user'
+        },
+        previousMessages: messageHistory
+      });
 
       // Make the fetch request
       const response = await fetch('/chat', {
@@ -52,6 +64,7 @@ function initHandler() {
 
       // Create a new assistant message div
       currentAssistantMessage = addMessage('', false);
+      let assistantResponse = '';
 
       // Handle streaming response
       const reader = response.body?.getReader();
@@ -79,6 +92,7 @@ function initHandler() {
               const { token } = JSON.parse(line);
               if (currentAssistantMessage) {
                 currentAssistantMessage.textContent += token;
+                assistantResponse += token;
               }
             } catch (e) {
               console.error('Error parsing JSON:', e);
@@ -93,11 +107,16 @@ function initHandler() {
           const { token } = JSON.parse(buffer);
           if (currentAssistantMessage) {
             currentAssistantMessage.textContent += token;
+            assistantResponse += token;
           }
         } catch (e) {
           console.error('Error parsing JSON:', e);
         }
       }
+
+      // Add messages to history
+      messageHistory.push({ text: message, role: 'user' });
+      messageHistory.push({ text: assistantResponse, role: 'assistant' });
 
     } catch (error) {
       console.error('Error:', error);
