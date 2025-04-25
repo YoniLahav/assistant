@@ -1,16 +1,27 @@
 const { ipcRenderer } = require('electron');
 
-document.addEventListener('DOMContentLoaded', () => {
+function initHandler() {
+  // Remove this listener first to prevent any race conditions
+  document.removeEventListener('DOMContentLoaded', initHandler);
+
   const messageInput = document.getElementById('messageInput') as HTMLInputElement;
   const sendButton = document.getElementById('sendButton') as HTMLButtonElement;
   const responseDiv = document.getElementById('response') as HTMLDivElement;
   const responseText = document.getElementById('responseText') as HTMLSpanElement;
 
+  let isProcessing = false;
+
   async function sendMessage() {
+    if (isProcessing) return;
+    
     const message = messageInput.value.trim();
+    messageInput.value = '';
     if (!message) return;
 
     try {
+      isProcessing = true;
+      sendButton.disabled = true;
+
       // Clear previous response
       responseText.textContent = '';
       responseDiv.style.display = 'block';
@@ -19,7 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const requestBody = JSON.stringify({ message });
 
       // Make the fetch request
-      const response = await fetch('http://localhost:5000/chat', {
+      const response = await fetch('/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -73,22 +84,28 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
-      // Clear the input field after successful message send
-      messageInput.value = '';
-
     } catch (error) {
       console.error('Error:', error);
       responseText.textContent = 'Error communicating with the backend';
       responseDiv.style.display = 'block';
+    } finally {
+      isProcessing = false;
+      sendButton.disabled = false;
     }
   }
 
   sendButton.addEventListener('click', sendMessage);
-
-  // Also handle Enter key in the input field
   messageInput.addEventListener('keypress', (e) => {
-    if (e.key === 'Enter') {
+    if ((e as KeyboardEvent).key === 'Enter') {
       sendMessage();
     }
   });
-}); 
+}
+
+// Only add the listener if we haven't already
+if (!document.readyState || document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initHandler);
+} else {
+  // If DOM is already loaded, run immediately
+  initHandler();
+} 
