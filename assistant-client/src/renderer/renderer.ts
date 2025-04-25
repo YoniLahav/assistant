@@ -73,6 +73,9 @@ document.addEventListener('DOMContentLoaded', () => {
         }
       }
 
+      // Clear the input field after successful message send
+      messageInput.value = '';
+
     } catch (error) {
       console.error('Error:', error);
       responseText.textContent = 'Error communicating with the backend';
