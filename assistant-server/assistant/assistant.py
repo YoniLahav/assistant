@@ -4,11 +4,10 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
 from config import OPENAI_API_KEY
 import json
-from collections import defaultdict
-import traceback
-from anyio import ClosedResourceError
+from datetime import datetime
 
-system_message = SystemMessage("You are an AI personal assistant. You help the USER with general tasks like getting weather data, checking their calendar, etc. You must be formal and polite when addressing the USER.") # When answering a question, you must give accurate data you obtained from the tools at your disposal; you mustn't make up fabricated informatino yousrself.messages = [system_message, HumanMessage("Hey, how are you?")]
+system_message = SystemMessage(
+    f"Today is {datetime.today().strftime('%d-%m-%Y')}. You are an AI personal assistant. You help the USER with general tasks like getting weather data, checking their calendar, etc. You must be formal and polite when addressing the USER. When answering a question, you must give accurate data you obtained from the tools at your disposal; you mustn't make up information yousrself. When listing the USER's events you MUST start with a new line, and list the events off one by one in a numbered list with a new line after each listing. Each event should have a name and a start and end date, and possibly times. When including those parameters, make sure to only print them if they exist! If you don't have the data, simply don't print anything.")
 
 async def init_model():
 
@@ -21,11 +20,13 @@ async def init_model():
 
     # Create client without using context manager
     client = MultiServerMCPClient({
-        "math": {
+        "calendar": {
             "url": "http://localhost:8000/sse",
             "transport": "sse",
         }
     })
+
+    await client.__aenter__()
     
     # Get tools
     tools = client.get_tools()
@@ -64,68 +65,46 @@ def send_message(model, tools, request_data):
     return generate_stream(model, tools, messages)
 
 
-async def generate_stream(model, tools, message_list):
-    tool_call_accumulators = defaultdict(lambda: {"name": None, "args": ""})
-    tool_call_ids = {}
+async def generate_stream(model, tools, messages):
 
-    async for chunk in model.astream(message_list):
+    first = True
+    gathered = None
+    tool_used = False
+
+    async for chunk in model.astream(messages):
 
         if chunk.content:
             yield json.dumps({"type": "content", "token": chunk.content}) + "\n"
 
-        if hasattr(chunk, 'tool_call_chunks'):
-            for tc in chunk.tool_call_chunks:
+        if first:
+            gathered = chunk
+            first = False
+        else:
+            gathered += chunk
 
-                idx = tc['index']
+    messages.append(gathered)
 
-                if tc['name']:
-                    tool_call_accumulators[idx]["name"] = tc['name']
-                if tc['args']:
-                    tool_call_accumulators[idx]["args"] += tc['args']
-                if tc['id']:
-                    tool_call_ids[idx] = tc['id']
+    if gathered:
+        for tool_call in gathered.tool_calls:
 
-        # Check if any tool calls are complete
-        for idx, acc in list(tool_call_accumulators.items()):
-            name = acc["name"]
-            args_str = acc["args"]
-            if name and args_str:
-                try:
-                    args = json.loads(args_str)
-                except json.JSONDecodeError:
-                    continue  # Wait for more chunks to complete the JSON
+            name = tool_call['name']
+            args = tool_call['args']
+            call_id = tool_call['id']
 
-                print(f"received valid args for tool_call: {args}")
-                print(f"getting tool by name: {name} from tools: {tools}")
+            tool = tools.get(name)
+            
+            result = await tool.ainvoke(input=args)
 
-                # Execute the tool
-                tool = tools.get(name)
-                if tool:
-                    print("running tool:")
-                    
-                    try:
-                        result = await tool.ainvoke(input=args)
-                    except ClosedResourceError as e:
-                            print("Encountered ClosedResourceError: The resource was closed before the operation could complete.")
-                            traceback.print_exc()
-                            result = None
-                    except Exception as e:
-                        print(f"Error invoking tool: {e}")
-                        print(f"Exception type: {type(e)}")
-                        print(f"Exception repr: {repr(e)}")
-                        traceback.print_exc()
-                        result = None
+            tool_message = ToolMessage(
+                content=str(result),
+                tool_call_id=call_id
+            )
 
-                    data = {"tool_result": result}
-                    yield json.dumps(data) + "\n"
+            messages.append(tool_message)
+            tool_used = True
 
-                    # Create a ToolMessage to inform the model of the tool's result
-                    tool_message = ToolMessage(
-                        content=str(result),
-                        tool_call_id=tool_call_ids.get(idx, f"call_{idx}")
-                    )
-                    message_list.append(tool_message)
+    if tool_used:    
+        async for chunk in model.astream(messages):
+            if chunk.content:
+                yield json.dumps({"type": "content", "token": chunk.content}) + "\n"
 
-                    # Clear the accumulator for this tool call
-                    del tool_call_accumulators[idx]
-                    del tool_call_ids[idx]
