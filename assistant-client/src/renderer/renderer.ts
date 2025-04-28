@@ -6,16 +6,15 @@ interface Message {
 }
 
 function initHandler() {
-  // Remove this listener first to prevent any race conditions
   document.removeEventListener('DOMContentLoaded', initHandler);
 
   const messageInput = document.getElementById('messageInput') as HTMLInputElement;
   const sendButton = document.getElementById('sendButton') as HTMLButtonElement;
+  const clearButton = document.getElementById('clearButton') as HTMLButtonElement; // New clear button
   const chatContainer = document.getElementById('chatContainer') as HTMLDivElement;
 
   let isProcessing = false;
   let currentAssistantMessage: HTMLDivElement | null = null;
-  let messageHistory: Message[] = [];
 
   function addMessage(message: string, isUser: boolean) {
     const messageDiv = document.createElement('div');
@@ -28,7 +27,7 @@ function initHandler() {
 
   async function sendMessage() {
     if (isProcessing) return;
-    
+
     const message = messageInput.value.trim();
     messageInput.value = '';
     if (!message) return;
@@ -37,19 +36,15 @@ function initHandler() {
       isProcessing = true;
       sendButton.disabled = true;
 
-      // Add user message to chat
       addMessage(message, true);
 
-      // Create the request body with message history
       const requestBody = JSON.stringify({
         message: {
           text: message,
           role: 'user'
-        },
-        previousMessages: messageHistory
+        }
       });
 
-      // Make the fetch request
       const response = await fetch('/chat', {
         method: 'POST',
         headers: {
@@ -62,11 +57,9 @@ function initHandler() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
 
-      // Create a new assistant message div
       currentAssistantMessage = addMessage('', false);
       let assistantResponse = '';
 
-      // Handle streaming response
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -79,12 +72,9 @@ function initHandler() {
         const { done, value } = await reader.read();
         if (done) break;
 
-        // Decode the chunk and add it to our buffer
         buffer += decoder.decode(value, { stream: true });
-
-        // Process complete lines from the buffer
         const lines = buffer.split('\n');
-        buffer = lines.pop() || ''; // Keep the last incomplete line in the buffer
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
           if (line.trim()) {
@@ -101,7 +91,6 @@ function initHandler() {
         }
       }
 
-      // Process any remaining content in the buffer
       if (buffer.trim()) {
         try {
           const { token } = JSON.parse(buffer);
@@ -113,11 +102,6 @@ function initHandler() {
           console.error('Error parsing JSON:', e);
         }
       }
-
-      // Add messages to history
-      messageHistory.push({ text: message, role: 'user' });
-      messageHistory.push({ text: assistantResponse, role: 'assistant' });
-
     } catch (error) {
       console.error('Error:', error);
       if (currentAssistantMessage) {
@@ -130,7 +114,34 @@ function initHandler() {
     }
   }
 
+  async function clearChat() {
+    try {
+      const response = await fetch('/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ clear: true }),
+      });
+  
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+  
+      // Clear UI messages
+      chatContainer.innerHTML = '';
+  
+      // Also clear any local assistant message state
+      currentAssistantMessage = null;
+  
+      console.log('Chat cleared successfully');
+    } catch (error) {
+      console.error('Error clearing chat:', error);
+    }
+  }
+
   sendButton.addEventListener('click', sendMessage);
+  clearButton.addEventListener('click', clearChat); // TODO: registers twice, fix this
   messageInput.addEventListener('keypress', (e) => {
     if ((e as KeyboardEvent).key === 'Enter') {
       sendMessage();
@@ -138,10 +149,8 @@ function initHandler() {
   });
 }
 
-// Only add the listener if we haven't already
 if (!document.readyState || document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', initHandler);
 } else {
-  // If DOM is already loaded, run immediately
   initHandler();
-} 
+}

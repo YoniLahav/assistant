@@ -16,11 +16,11 @@ async def init_model():
     if not os.environ.get("OPENAI_API_KEY"):
         os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-    model = init_chat_model("gpt-4o-mini", model_provider="openai", streaming=True)
+    model = init_chat_model("gpt-4o-mini", model_provider="openai")
 
     # Create client without using context manager
     client = MultiServerMCPClient({
-        "calendar": {
+        "Budget": {
             "url": "http://localhost:8000/sse",
             "transport": "sse",
         }
@@ -33,30 +33,16 @@ async def init_model():
 
     return (model.bind_tools(tools), {tools[i].name: tools[i] for i in range(0, len(tools))}, client)
 
+def init_messages():
+    return [system_message]
 
-def send_message(model, tools, request_data):
-    messages = [system_message]
-
-    # First, add previous messages
-    previous_messages = request_data.get("previousMessages", [])
-    for msg in previous_messages:
-        role = msg.get("role")
-        text = msg.get("text", "")
-        if role == "user":
-            messages.append(HumanMessage(text))
-        elif role == "assistant":
-            messages.append(AIMessage(text))
-        else:
-            raise ValueError(f"Unsupported role: {role}")
-
+def send_message(model, tools, messages, request_data):
     # Add the new incoming message
     new_message = request_data.get("message", {})
     new_role = new_message.get("role")
     new_text = new_message.get("text", "")
     if new_role == "user":
         messages.append(HumanMessage(new_text))
-    elif new_role == "assistant":
-        messages.append(AIMessage(new_text))
     else:
         raise ValueError(f"Unsupported role: {new_role}")
     
@@ -66,45 +52,48 @@ def send_message(model, tools, request_data):
 
 
 async def generate_stream(model, tools, messages):
+    while True:
+        first = True
+        gathered = None
+        tool_used = False
 
-    first = True
-    gathered = None
-    tool_used = False
-
-    async for chunk in model.astream(messages):
-
-        if chunk.content:
-            yield json.dumps({"type": "content", "token": chunk.content}) + "\n"
-
-        if first:
-            gathered = chunk
-            first = False
-        else:
-            gathered += chunk
-
-    messages.append(gathered)
-
-    if gathered:
-        for tool_call in gathered.tool_calls:
-
-            name = tool_call['name']
-            args = tool_call['args']
-            call_id = tool_call['id']
-
-            tool = tools.get(name)
-            
-            result = await tool.ainvoke(input=args)
-
-            tool_message = ToolMessage(
-                content=str(result),
-                tool_call_id=call_id
-            )
-
-            messages.append(tool_message)
-            tool_used = True
-
-    if tool_used:    
         async for chunk in model.astream(messages):
+
             if chunk.content:
                 yield json.dumps({"type": "content", "token": chunk.content}) + "\n"
 
+            if first:
+                gathered = chunk
+                first = False
+            else:
+                gathered += chunk
+
+        if not gathered:
+            break
+
+        messages.append(gathered)
+        print(f"[DEBUG] adding gathered message to list. gathered is of type {type(gathered)}")
+
+        if gathered.tool_calls:
+            for tool_call in gathered.tool_calls:
+                name = tool_call['name']
+                args = tool_call['args']
+                call_id = tool_call['id']
+
+                tool = tools.get(name)
+
+                print(f"[DEBUG] running tool <{name}> with arguments <{args}>")
+                
+
+                result = await tool.ainvoke(input=args)
+
+                tool_message = ToolMessage(
+                    content=str(result),
+                    tool_call_id=call_id
+                )
+
+                messages.append(tool_message)
+                tool_used = True
+
+        if not tool_used:
+            break
